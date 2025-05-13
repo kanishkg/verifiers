@@ -99,11 +99,7 @@ if is_vllm_available():
     class WeightSyncWorker(_BaseWorker, WeightSyncWorkerExtension):  # type: ignore[misc]
         """*Alias* that combines the default vLLM Worker with our sync extension."""
 
-# -------------------------------------------------------------------------(self) -> None:
-        if self.pynccl_comm is not None:
-            del self.pynccl_comm
-            self.pynccl_comm = None
-            self.client_rank = None
+
 
 
 @dataclass
