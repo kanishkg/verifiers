@@ -186,6 +186,78 @@ def main(script_args: ScriptArguments):
         outputs = list(chain.from_iterable(outputs))
         return {"completion_ids": [list(o.token_ids) for r in outputs for o in r.outputs]}
 
+        # ---- Chat endpoint -------------------------------------------------
+    class ChatRequest(BaseModel):
+        messages: list[list[dict[str, str]]]
+        n: int = 1
+        repetition_penalty: float = 1.0
+        temperature: float = 1.0
+        top_p: float = 1.0
+        top_k: int = -1
+        min_p: float = 0.0
+        max_tokens: int = 16
+        guided_decoding_regex: Optional[str] = None
+        stop: Optional[list[str]] = None
+        include_stop_str_in_output: bool = False
+        skip_special_tokens: bool = True
+        spaces_between_special_tokens: bool = True
+
+    class ChatOutput(BaseModel):
+        token_ids: list[int]
+        text: str
+
+    class ChatResponseItem(BaseModel):
+        prompt_token_ids: list[int]
+        outputs: list[ChatOutput]
+
+    class ChatResponse(BaseModel):
+        responses: list[ChatResponseItem]
+
+    @app.post("/chat/", response_model=ChatResponse)
+    async def chat(request: ChatRequest):
+        # Guided decoding, if enabled
+        guided_decoding = GuidedDecodingParams(backend="outlines", regex=request.guided_decoding_regex) \
+            if request.guided_decoding_regex else None
+
+        sampling_params = SamplingParams(
+            n=request.n,
+            repetition_penalty=request.repetition_penalty,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            top_k=request.top_k,
+            min_p=request.min_p,
+            max_tokens=request.max_tokens,
+            guided_decoding=guided_decoding,
+            stop=request.stop,
+            include_stop_str_in_output=request.include_stop_str_in_output,
+            skip_special_tokens=request.skip_special_tokens,
+            spaces_between_special_tokens=request.spaces_between_special_tokens,
+        )
+
+        # Evenly distribute conversations across DP ranks
+        chunked_messages = chunk_list(request.messages, script_args.data_parallel_size)
+        for conn, msgs in zip(connections, chunked_messages):
+            if not msgs:
+                msgs = [[{"role": "user", "content": "<placeholder>"}]]
+            conn.send({
+                "type": "call",
+                "method": "chat",
+                "kwargs": {"messages": msgs, "sampling_params": sampling_params},
+            })
+
+        all_outputs = [conn.recv() for conn in connections if conn]
+        all_outputs = list(chain.from_iterable(all_outputs))
+
+        responses: list[ChatResponseItem] = []
+        for outputs in all_outputs:
+            item = ChatResponseItem(prompt_token_ids=list(outputs.prompt_token_ids), outputs=[])
+            for output in outputs.outputs:
+                item.outputs.append(ChatOutput(token_ids=list(output.token_ids), text=output.text))
+            responses.append(item)
+        return {"responses": responses}
+
+    # -------------------------------------------------------------------
+
     class InitCommunicatorRequest(BaseModel):
         host: str
         port: int
