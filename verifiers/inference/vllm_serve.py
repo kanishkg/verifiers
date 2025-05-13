@@ -48,26 +48,58 @@ os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 
 class WeightSyncWorkerExtension:
-    pynccl_comm = None
-    client_rank = None
+    """
+    A vLLM **worker extension** that enables weight synchronization between a client and
+    multiple server workers. This class should be passed to *worker_extension_cls* in
+    the `LLM` constructor (vLLM ≥ 0.4).
 
+    We still expose a legacy `WeightSyncWorker` alias for backward‑compatibility with
+    code paths that expect a full custom worker class (pre‑0.4 style).
+    """
+
+    # These attributes are initialised by ``init_communicator``
+    pynccl_comm = None  # Communicator for weight updates
+    client_rank = None  # Source rank for broadcasting updated weights
+
+    # ---------------------------------------------------------------------
+    # ♥  Communicator helpers
+    # ---------------------------------------------------------------------
     def init_communicator(self, host: str, port: int, world_size: int) -> None:
         if self.pynccl_comm is not None:
-            raise RuntimeError("Weight update group already initialized.")
+            raise RuntimeError("Weight update group already initialised; call close_communicator() first.")
         rank = get_world_group().rank
         pg = StatelessProcessGroup.create(host=host, port=port, rank=rank, world_size=world_size)
         self.pynccl_comm = PyNcclCommunicator(pg, device=self.device)
-        self.client_rank = world_size - 1
+        self.client_rank = world_size - 1  # the external client is the last rank
 
     def update_named_param(self, name: str, dtype: torch.dtype, shape: Sequence[int]) -> None:
         if self.pynccl_comm is None:
-            raise RuntimeError("Communicator not initialized.")
+            raise RuntimeError("Communicator not initialised. Call init_communicator() first.")
         weight = torch.empty(shape, dtype=dtype, device=self.device)
         self.pynccl_comm.broadcast(weight, src=self.client_rank)
         self.pynccl_comm.group.barrier()
+        # Hot‑swap the weights into the model
         self.model_runner.model.load_weights(weights=[(name, weight)])
 
     def close_communicator(self) -> None:
+        if self.pynccl_comm is not None:
+            del self.pynccl_comm
+            self.pynccl_comm = None
+            self.client_rank = None
+
+# -------------------------------------------------------------------------
+# Legacy compatibility shim –> provides the pre‑0.17 ``WeightSyncWorker``
+# -------------------------------------------------------------------------
+if is_vllm_available():
+    try:
+        from vllm.worker.worker import Worker as _BaseWorker
+    except Exception:  # pragma: no cover
+        _BaseWorker = object  # Fallback in exotic envs
+
+    class WeightSyncWorker(_BaseWorker, WeightSyncWorkerExtension):  # type: ignore[misc]
+        """*Alias* that combines the default vLLM Worker with our sync extension."""
+
+# -------------------------------------------------------------------------(self) -> None:
         if self.pynccl_comm is not None:
             del self.pynccl_comm
             self.pynccl_comm = None
