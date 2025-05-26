@@ -25,7 +25,6 @@ trl.extras.vllm_client.VLLMClient = VLLMClient
 
 from trl import GRPOTrainer, GRPOConfig
 from trl.data_utils import maybe_apply_chat_template
-from trl.import_utils import is_rich_available
 from trl.trainer.utils import pad
 
 if is_wandb_available():
@@ -252,13 +251,12 @@ class GRPOEnvTrainer(GRPOTrainer):
             rewards_to_log = rewards.tolist()
 
             if self.accelerator.is_main_process:
-                if is_rich_available():
-                    print_prompt_completions_sample(
-                        [str(prompts_to_log[0][-1]["content"])],
-                        [completions_to_log[0]],
-                        [rewards_to_log[0]],
-                        self.state.global_step,
-                    )
+                print_prompt_completions_sample(
+                    [str(prompts_to_log[0][-1]["content"])],
+                    [completions_to_log[0]],
+                    [rewards_to_log[0]],
+                    self.state.global_step,
+                )
                 if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None: # type: ignore
                     import pandas as pd
 
