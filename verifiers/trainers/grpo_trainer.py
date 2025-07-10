@@ -656,6 +656,8 @@ class GRPOTrainer(Trainer):
                 'repetition_penalty': self.repetition_penalty,
             }
         }
+        max_turns = getattr(self.env, "max_turns", None) or 1
+        args["max_tokens"] = self.max_completion_length // max_turns
         return args
 
     def _get_model_name(self) -> str:
@@ -697,16 +699,14 @@ class GRPOTrainer(Trainer):
         Returns:
             Tuple of (all_prompts, all_answers, all_tasks)
         """
-        batches = self._async_dataloader.peek_ahead(batch_offset)
+        peek_n = 1 if batch_offset == 0 else batch_offset
+        batches = self._async_dataloader.peek_ahead(peek_n)
 
-        if batch_offset == 0:
-            batch = batches[0] if batches else None
-        else:
-            batch = batches[batch_offset - 1] if batches else None
-
-        if batch is None:
+        if not batches:
             return [], [], [], []
-        
+
+        batch = batches[batch_offset - 1] if batch_offset > 0 else batches[0]
+
         if isinstance(batch, dict):
             batch = [batch]
 
