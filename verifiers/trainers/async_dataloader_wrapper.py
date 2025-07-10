@@ -7,7 +7,7 @@ import threading
 class AsyncDataLoaderWrapper:
     """
     Wraps a DataLoader to provide batch prefetching capabilities for async generation.
-    
+
     This wrapper maintains a buffer of upcoming batches that can be accessed
     without advancing the main iterator, allowing async generation to work
     ahead while training continues on current batches.
@@ -122,8 +122,22 @@ class AsyncDataLoaderWrapper:
     def batch_size(self):
         """Return batch size of underlying dataloader"""
         return self.dataloader.batch_size
-        
+
     @property
     def dataset(self):
         """Return dataset of underlying dataloader"""
-        return self.dataloader.dataset 
+        return self.dataloader.dataset
+
+    @property
+    def sampler(self):
+        """Forward sampler attribute required by ``accelerate``."""
+        return self.dataloader.sampler
+
+    @property
+    def batch_sampler(self):
+        """Forward batch_sampler attribute required by ``accelerate``."""
+        return self.dataloader.batch_sampler
+
+    def __getattr__(self, name: str):
+        """Fallback to the underlying dataloader for missing attributes."""
+        return getattr(self.dataloader, name)
