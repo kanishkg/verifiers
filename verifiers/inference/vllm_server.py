@@ -110,7 +110,8 @@ class WeightSyncWorkerExtension:
 
 async def run_server(args: Namespace):
     sock_addr = (args.host or "0.0.0.0", args.port)
-    sock = create_server_socket(sock_addr)
+    rank = int(os.environ.get("RANK", "0"))
+    sock = create_server_socket(sock_addr) if rank == 0 else None
 
     set_ulimit()
     def signal_handler(*_) -> None:
