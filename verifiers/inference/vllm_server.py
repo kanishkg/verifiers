@@ -119,6 +119,7 @@ class WeightSyncWorkerExtension:
 
 
 async def run_server(args: Namespace):
+
     sock_addr = (args.host or "0.0.0.0", args.port)
     # When using data parallelism, each worker process executes this function.
     # Attempting to bind the server socket in every process causes an
@@ -233,7 +234,9 @@ async def run_server(args: Namespace):
         ssl_ca_certs=args.ssl_ca_certs,
         ssl_cert_reqs=args.ssl_cert_reqs,
     )
-    await shutdown_task
+
+    if shutdown_task is not None:
+        await shutdown_task
 
     # Cancel and wait for background tasks
     for task in background_tasks:
@@ -241,7 +244,10 @@ async def run_server(args: Namespace):
     if background_tasks:
         await asyncio.gather(*background_tasks, return_exceptions=True)
 
-    sock.close()
+    
+    if sock is not None:
+        sock.close()
+
 
 
 def main(script_args: Sequence[str] | None = None) -> None:
