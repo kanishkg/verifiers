@@ -41,6 +41,7 @@ weight_update_semaphore = asyncio.Semaphore(MAX_CONCURRENT_WEIGHT_UPDATES)
 # Track background tasks for cleanup
 background_tasks = set()
 
+
 class WeightSyncWorkerExtension:
     """
     A vLLM worker extension that enables weight synchronization between a client and multiple server workers.
@@ -69,14 +70,20 @@ class WeightSyncWorkerExtension:
                 Total number of participating processes in the update group.
         """
         if self.pynccl_comm is not None:
-            raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
+            raise RuntimeError(
+                "Weight update group already initialized. Call close_communicator first."
+            )
 
         rank = get_world_group().rank
-        pg = StatelessProcessGroup.create(host=host, port=port, rank=rank, world_size=world_size)
-        self.pynccl_comm = PyNcclCommunicator(pg, device=self.device) # type: ignore
+        pg = StatelessProcessGroup.create(
+            host=host, port=port, rank=rank, world_size=world_size
+        )
+        self.pynccl_comm = PyNcclCommunicator(pg, device=self.device)  # type: ignore
         self.client_rank = world_size - 1
 
-    def update_named_param(self, name: str, dtype: torch.dtype, shape: Sequence[int]) -> None:
+    def update_named_param(
+        self, name: str, dtype: torch.dtype, shape: Sequence[int]
+    ) -> None:
         """
         Receives updated weights from the client process and updates the named parameter in the model.
 
@@ -89,12 +96,14 @@ class WeightSyncWorkerExtension:
                 Shape of the weight tensor.
         """
         if self.pynccl_comm is None:
-            raise RuntimeError("Communicator not initialized. Call `init_communicator` first.")
+            raise RuntimeError(
+                "Communicator not initialized. Call `init_communicator` first."
+            )
 
-        weight = torch.empty(shape, dtype=dtype, device=self.device) # type: ignore
-        self.pynccl_comm.broadcast(weight, src=self.client_rank) # type: ignore 
+        weight = torch.empty(shape, dtype=dtype, device=self.device)  # type: ignore
+        self.pynccl_comm.broadcast(weight, src=self.client_rank)  # type: ignore
         self.pynccl_comm.group.barrier()
-        self.model_runner.model.load_weights(weights=[(name, weight)]) # type: ignore
+        self.model_runner.model.load_weights(weights=[(name, weight)])  # type: ignore
 
     def close_communicator(self) -> None:
         """
@@ -108,18 +117,24 @@ class WeightSyncWorkerExtension:
             self.pynccl_comm = None  # Ensure attribute is reset to None
             self.client_rank = None  # Ensure attribute is reset to None
 
+
 async def run_server(args: Namespace):
 
-    sock = None
-    if getattr(args, "rank", 0) == 0:
-        sock_addr = (args.host or "0.0.0.0", args.port)
-        sock = create_server_socket(sock_addr)
+    sock_addr = (args.host or "0.0.0.0", args.port)
+    # When using data parallelism, each worker process executes this function.
+    # Attempting to bind the server socket in every process causes an
+    # "address already in use" error. Only the rank 0 process should create the
+    # listening socket; the others pass ``None`` and share it.
+    rank = int(os.environ.get("RANK", "0"))
+    sock = create_server_socket(sock_addr) if rank == 0 else None
 
     set_ulimit()
+
     def signal_handler(*_) -> None:
         raise KeyboardInterrupt
+
     signal.signal(signal.SIGTERM, signal_handler)
-    
+
     def create_background_task(coro):
         """Create a background task and track it for cleanup"""
         task = asyncio.create_task(coro)
@@ -128,8 +143,12 @@ async def run_server(args: Namespace):
         return task
 
     engine_args = AsyncEngineArgs.from_cli_args(args)
-    engine_args.worker_extension_cls = "verifiers.inference.vllm_server.WeightSyncWorkerExtension"
-    engine = AsyncLLMEngine.from_engine_args(engine_args, usage_context=UsageContext.OPENAI_API_SERVER)
+    engine_args.worker_extension_cls = (
+        "verifiers.inference.vllm_server.WeightSyncWorkerExtension"
+    )
+    engine = AsyncLLMEngine.from_engine_args(
+        engine_args, usage_context=UsageContext.OPENAI_API_SERVER
+    )
     app = build_app(args)
 
     @app.get("/health")
@@ -153,7 +172,9 @@ async def run_server(args: Namespace):
         port = data.get("port")
         world_size = data.get("world_size")
         # fire and forget
-        create_background_task(engine.collective_rpc("init_communicator", args=(host, port, world_size)))
+        create_background_task(
+            engine.collective_rpc("init_communicator", args=(host, port, world_size))
+        )
         return {"status": "ok"}
 
     @app.post("/update_named_param")
@@ -174,14 +195,16 @@ async def run_server(args: Namespace):
         name = data.get("name")
         dtype_str = data.get("dtype")
         shape = data.get("shape")
-        
+
         dtype = getattr(torch, dtype_str.split(".")[-1])
         shape_tuple = tuple(shape)
-        
+
         async def throttled_update():
             async with weight_update_semaphore:
-                await engine.collective_rpc("update_named_param", args=(name, dtype, shape_tuple))
-        
+                await engine.collective_rpc(
+                    "update_named_param", args=(name, dtype, shape_tuple)
+                )
+
         # fire and forget with throttling
         create_background_task(throttled_update())
         return {"status": "ok"}
@@ -211,25 +234,32 @@ async def run_server(args: Namespace):
         ssl_ca_certs=args.ssl_ca_certs,
         ssl_cert_reqs=args.ssl_cert_reqs,
     )
+
     if shutdown_task is not None:
         await shutdown_task
-    
+
     # Cancel and wait for background tasks
     for task in background_tasks:
         task.cancel()
     if background_tasks:
         await asyncio.gather(*background_tasks, return_exceptions=True)
+
     
     if sock is not None:
         sock.close()
 
-def main():
-    parser = FlexibleArgumentParser(description="vLLM OpenAI-compatible server with weight synchronization")
+
+
+def main(script_args: Sequence[str] | None = None) -> None:
+    """Start the vLLM server with optional command line arguments."""
+    parser = FlexibleArgumentParser(
+        description="vLLM OpenAI-compatible server with weight synchronization"
+    )
     parser = make_arg_parser(parser)
-    args = parser.parse_args()
+    args = parser.parse_args(script_args)
     validate_parsed_serve_args(args)
-    print(args)
     uvloop.run(run_server(args))
+
 
 if __name__ == "__main__":
     main()
