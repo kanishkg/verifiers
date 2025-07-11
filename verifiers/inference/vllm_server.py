@@ -109,6 +109,7 @@ class WeightSyncWorkerExtension:
             self.client_rank = None  # Ensure attribute is reset to None
 
 async def run_server(args: Namespace):
+
     sock = None
     if getattr(args, "rank", 0) == 0:
         sock_addr = (args.host or "0.0.0.0", args.port)
